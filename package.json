@@ -1,0 +1,25 @@
+{
+  "name": "map_api",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "maryam",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "nodemon server.js"
+  },
+  "dependencies": {
+    "cloudinary": "^2.11.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.1",
+    "express": "^5.2.1",
+    "firebase-admin": "^13.8.0",
+    "multer": "^2.4.0",
+    "nodemailer": "^10.0.15"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
