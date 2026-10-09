@@ -1,72 +1,391 @@
+
 const db = require("../config/firebase");
 
 const hostelsRef = db.collection("hostels");
 
+const MAX_IMAGES = 3;
 
 // ======================================================
-// 🔥 ADD HOSTEL
-// POST /hostels/
+// HELPER: STANDARD ERROR RESPONSE
+// ======================================================
+function sendServerError(res, operation, err) {
+  console.error(`${operation} error:`, err);
+
+  return res.status(500).json({
+    success: false,
+    message: `${operation} failed`,
+    error: err?.message || "Unexpected server error",
+  });
+}
+
+// ======================================================
+// HELPER: VALIDATE IMAGE URLS
+// Accept HTTPS Cloudinary delivery URLs only.
+// ======================================================
+function validateImages(images) {
+  if (images === undefined) {
+    return {
+      valid: true,
+      images: undefined,
+    };
+  }
+
+  if (!Array.isArray(images)) {
+    return {
+      valid: false,
+      message: "Images must be an array of Cloudinary URLs.",
+    };
+  }
+
+  if (images.length > MAX_IMAGES) {
+    return {
+      valid: false,
+      message: `A maximum of ${MAX_IMAGES} images is allowed.`,
+    };
+  }
+
+  const cleanImages = [];
+
+  for (const image of images) {
+    if (typeof image !== "string" || !image.trim()) {
+      return {
+        valid: false,
+        message: "Every image must be a valid URL string.",
+      };
+    }
+
+    try {
+      const parsedUrl = new URL(image.trim());
+
+      if (
+        parsedUrl.protocol !== "https:" ||
+        parsedUrl.hostname.toLowerCase() !==
+          "res.cloudinary.com"
+      ) {
+        return {
+          valid: false,
+          message:
+            "Images must use HTTPS Cloudinary delivery URLs.",
+        };
+      }
+
+      cleanImages.push(parsedUrl.href);
+    } catch {
+      return {
+        valid: false,
+        message: "An image URL is invalid.",
+      };
+    }
+  }
+
+  return {
+    valid: true,
+    images: cleanImages,
+  };
+}
+
+// ======================================================
+// HELPER: VALIDATE NUMERIC FIELDS
+// ======================================================
+function parseNonNegativeNumber(value, field) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number) || number < 0) {
+    return {
+      valid: false,
+      message: `${field} must be a valid non-negative number.`,
+    };
+  }
+
+  return {
+    valid: true,
+    value: number,
+  };
+}
+
+function parseCoordinate(value, field) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return {
+      valid: false,
+      message: `${field} must be a valid number.`,
+    };
+  }
+
+  if (
+    (field === "latitude" && (number < -90 || number > 90)) ||
+    (field === "longitude" && (number < -180 || number > 180))
+  ) {
+    return {
+      valid: false,
+      message: `${field} is outside the valid range.`,
+    };
+  }
+
+  return {
+    valid: true,
+    value: number,
+  };
+}
+
+// ======================================================
+// HELPER: VALIDATE EDIT REQUEST
+// ======================================================
+function validateHostelChanges(input) {
+  if (
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input)
+  ) {
+    return {
+      valid: false,
+      message: "Invalid hostel update data.",
+    };
+  }
+
+  const allowedFields = [
+    "name",
+    "rent",
+    "category",
+    "facilities",
+    "latitude",
+    "longitude",
+    "whatsapp",
+    "email",
+    "images",
+  ];
+
+  const cleanUpdate = {};
+
+  for (const field of allowedFields) {
+    if (Object.hasOwn(input, field)) {
+      cleanUpdate[field] = input[field];
+    }
+  }
+
+  if (Object.keys(cleanUpdate).length === 0) {
+    return {
+      valid: false,
+      message: "No editable fields provided.",
+    };
+  }
+
+  if (Object.hasOwn(cleanUpdate, "name")) {
+    if (
+      typeof cleanUpdate.name !== "string" ||
+      !cleanUpdate.name.trim()
+    ) {
+      return {
+        valid: false,
+        message: "Hostel name cannot be empty.",
+      };
+    }
+
+    cleanUpdate.name = cleanUpdate.name.trim();
+  }
+
+  if (Object.hasOwn(cleanUpdate, "category")) {
+    if (typeof cleanUpdate.category !== "string") {
+      return {
+        valid: false,
+        message: "Category must be a string.",
+      };
+    }
+
+    cleanUpdate.category = cleanUpdate.category.trim();
+  }
+
+  if (Object.hasOwn(cleanUpdate, "rent")) {
+    const result = parseNonNegativeNumber(
+      cleanUpdate.rent,
+      "Rent"
+    );
+
+    if (!result.valid) return result;
+
+    cleanUpdate.rent = result.value;
+  }
+
+  for (const field of ["latitude", "longitude"]) {
+    if (Object.hasOwn(cleanUpdate, field)) {
+      const result = parseCoordinate(
+        cleanUpdate[field],
+        field
+      );
+
+      if (!result.valid) return result;
+
+      cleanUpdate[field] = result.value;
+    }
+  }
+
+  if (Object.hasOwn(cleanUpdate, "images")) {
+    const result = validateImages(cleanUpdate.images);
+
+    if (!result.valid) return result;
+
+    cleanUpdate.images = result.images;
+  }
+
+  if (Object.hasOwn(cleanUpdate, "facilities")) {
+    if (
+      !cleanUpdate.facilities ||
+      typeof cleanUpdate.facilities !== "object" ||
+      Array.isArray(cleanUpdate.facilities)
+    ) {
+      return {
+        valid: false,
+        message: "Facilities must be an object.",
+      };
+    }
+  }
+
+  for (const field of ["whatsapp", "email"]) {
+    if (Object.hasOwn(cleanUpdate, field)) {
+      if (typeof cleanUpdate[field] !== "string") {
+        return {
+          valid: false,
+          message: `${field} must be a string.`,
+        };
+      }
+
+      cleanUpdate[field] = cleanUpdate[field].trim();
+    }
+  }
+
+  return {
+    valid: true,
+    data: cleanUpdate,
+  };
+}
+
+// ======================================================
+// ADD HOSTEL
+// POST /hostels
 // ======================================================
 exports.addHostel = async (req, res) => {
   try {
-    const data = req.body;
+    const data = req.body || {};
+
+    const name =
+      typeof data.name === "string"
+        ? data.name.trim()
+        : "";
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: "Hostel name is required.",
+      });
+    }
+
+    const rentResult = parseNonNegativeNumber(
+      data.rent ?? 0,
+      "Rent"
+    );
+
+    if (!rentResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: rentResult.message,
+      });
+    }
+
+    const latitudeResult = parseCoordinate(
+      data.latitude ?? 0,
+      "latitude"
+    );
+
+    const longitudeResult = parseCoordinate(
+      data.longitude ?? 0,
+      "longitude"
+    );
+
+    if (!latitudeResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: latitudeResult.message,
+      });
+    }
+
+    if (!longitudeResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: longitudeResult.message,
+      });
+    }
+
+    const imageResult = validateImages(data.images);
+
+    if (!imageResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: imageResult.message,
+      });
+    }
+
+    if (
+      data.facilities !== undefined &&
+      (
+        !data.facilities ||
+        typeof data.facilities !== "object" ||
+        Array.isArray(data.facilities)
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Facilities must be an object.",
+      });
+    }
 
     const newHostel = {
-      name: data.name || "",
+      name,
+      rent: rentResult.value,
 
-      rent: data.rent || 0,
-
-      category: data.category || "",
+      category:
+        typeof data.category === "string"
+          ? data.category.trim()
+          : "",
 
       facilities: data.facilities || {},
 
-      latitude: data.latitude || 0,
+      latitude: latitudeResult.value,
+      longitude: longitudeResult.value,
 
-      longitude: data.longitude || 0,
+      whatsapp:
+        typeof data.whatsapp === "string"
+          ? data.whatsapp.trim()
+          : "",
 
-      whatsapp: data.whatsapp || "",
+      email:
+        typeof data.email === "string"
+          ? data.email.trim()
+          : "",
 
-      email: data.email || "",
+      images: imageResult.images || [],
 
-      // ================================================
-      // CLOUDINARY IMAGE URLS
-      // MAXIMUM 3 IMAGES
-      // ================================================
-      images: Array.isArray(data.images)
-        ? data.images.slice(0, 3)
-        : [],
-
-      // New hostel requires admin approval
       status: "pending",
-
-      // No edit request initially
       pendingUpdate: null,
-
-      createdAt: new Date()
+      createdAt: new Date(),
     };
 
     const result = await hostelsRef.add(newHostel);
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       id: result.id,
-      message: "Hostel added successfully"
+      message: "Hostel added successfully. Awaiting admin approval.",
+      images: newHostel.images,
     });
-
   } catch (err) {
-    console.error("Add hostel error:", err);
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    return sendServerError(res, "Add hostel", err);
   }
 };
 
-
 // ======================================================
-// 🔥 GET APPROVED HOSTELS
-// GET /hostels/
+// GET APPROVED HOSTELS
+// GET /hostels
 // ======================================================
 exports.getHostels = async (req, res) => {
   try {
@@ -76,35 +395,30 @@ exports.getHostels = async (req, res) => {
 
     const data = snapshot.docs.map((doc) => ({
       id: doc.id,
-      ...doc.data()
+      ...doc.data(),
     }));
 
-    res.status(200).json(data);
-
+    return res.status(200).json(data);
   } catch (err) {
-    console.error("Get hostels error:", err);
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    return sendServerError(res, "Get hostels", err);
   }
 };
 
-
 // ======================================================
-// 🔥 GET MY HOSTELS
+// GET MY HOSTELS
 // GET /hostels/my/list?email=provider@gmail.com
 // ======================================================
 exports.getMyHostels = async (req, res) => {
   try {
-
-    const email = req.query.email;
+    const email =
+      typeof req.query.email === "string"
+        ? req.query.email.trim()
+        : "";
 
     if (!email) {
       return res.status(400).json({
         success: false,
-        message: "Email is required"
+        message: "Email is required.",
       });
     }
 
@@ -114,331 +428,244 @@ exports.getMyHostels = async (req, res) => {
 
     const data = snapshot.docs.map((doc) => ({
       id: doc.id,
-      ...doc.data()
+      ...doc.data(),
     }));
 
-    res.status(200).json(data);
-
+    return res.status(200).json(data);
   } catch (err) {
-    console.error("Get my hostels error:", err);
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    return sendServerError(res, "Get my hostels", err);
   }
 };
 
-
 // ======================================================
-// 🔥 GET PENDING HOSTELS
+// GET PENDING HOSTELS
 // GET /hostels/pending/list
 // ======================================================
 exports.getPendingHostels = async (req, res) => {
   try {
-
     const snapshot = await hostelsRef
       .where("status", "==", "pending")
       .get();
 
     const data = snapshot.docs.map((doc) => ({
       id: doc.id,
-      ...doc.data()
+      ...doc.data(),
     }));
 
-    res.status(200).json(data);
-
+    return res.status(200).json(data);
   } catch (err) {
-    console.error("Get pending hostels error:", err);
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    return sendServerError(res, "Get pending hostels", err);
   }
 };
 
-
 // ======================================================
-// 🔥 GET SINGLE HOSTEL
+// GET SINGLE HOSTEL
 // GET /hostels/:id
 // ======================================================
 exports.getHostelById = async (req, res) => {
   try {
-
     const id = req.params.id;
 
-    const doc = await hostelsRef
-      .doc(id)
-      .get();
+    const doc = await hostelsRef.doc(id).get();
 
     if (!doc.exists) {
       return res.status(404).json({
         success: false,
-        message: "Hostel not found"
+        message: "Hostel not found.",
       });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       id: doc.id,
-      ...doc.data()
+      ...doc.data(),
     });
-
   } catch (err) {
-    console.error("Get hostel error:", err);
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    return sendServerError(res, "Get hostel", err);
   }
 };
 
-
 // ======================================================
-// 🔥 DELETE HOSTEL
+// DELETE HOSTEL
 // DELETE /hostels/:id
 // ======================================================
 exports.deleteHostel = async (req, res) => {
   try {
-
     const id = req.params.id;
-
     const docRef = hostelsRef.doc(id);
-
     const doc = await docRef.get();
 
     if (!doc.exists) {
       return res.status(404).json({
         success: false,
-        message: "Hostel not found"
+        message: "Hostel not found.",
       });
     }
 
     await docRef.delete();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Hostel deleted successfully"
+      message: "Hostel deleted successfully.",
     });
-
   } catch (err) {
-    console.error("Delete hostel error:", err);
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    return sendServerError(res, "Delete hostel", err);
   }
 };
 
-
 // ======================================================
-// 🔥 APPROVE NEW HOSTEL
+// APPROVE NEW HOSTEL
 // PATCH /hostels/approve/:id
 // ======================================================
 exports.approveHostel = async (req, res) => {
   try {
-
-    const id = req.params.id;
-
-    const docRef = hostelsRef.doc(id);
-
+    const docRef = hostelsRef.doc(req.params.id);
     const doc = await docRef.get();
 
     if (!doc.exists) {
       return res.status(404).json({
         success: false,
-        message: "Hostel not found"
+        message: "Hostel not found.",
+      });
+    }
+
+    if (doc.data().status !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: "This hostel is not awaiting initial approval.",
       });
     }
 
     await docRef.update({
-      status: "approved"
+      status: "approved",
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Hostel approved successfully"
+      message: "Hostel approved successfully.",
     });
-
   } catch (err) {
-    console.error("Approve hostel error:", err);
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    return sendServerError(res, "Approve hostel", err);
   }
 };
 
-
 // ======================================================
-// 🔥 UPDATE HOSTEL
+// SUBMIT HOSTEL EDIT REQUEST
 // PUT /hostels/:id
 //
-// Provider sends:
+// Body:
 // {
 //   "pendingUpdate": {
-//      ...
+//     "name": "Updated Hostel",
+//     "images": ["https://res.cloudinary.com/..."]
 //   }
 // }
 // ======================================================
 exports.updateHostel = async (req, res) => {
   try {
-
-    const id = req.params.id;
-
-    const docRef = hostelsRef.doc(id);
-
+    const docRef = hostelsRef.doc(req.params.id);
     const doc = await docRef.get();
 
     if (!doc.exists) {
       return res.status(404).json({
         success: false,
-        message: "Hostel not found"
+        message: "Hostel not found.",
       });
     }
 
-    const { pendingUpdate } = req.body;
+    const currentData = doc.data();
 
     if (
-      !pendingUpdate ||
-      Object.keys(pendingUpdate).length === 0
+      currentData.status === "pending" ||
+      currentData.status === "update_pending"
     ) {
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
-        message: "No changes provided"
+        message:
+          "This hostel already has a pending approval request.",
       });
     }
 
-    // ================================================
-    // MAXIMUM 3 IMAGES
-    // ================================================
-    if (Array.isArray(pendingUpdate.images)) {
-      pendingUpdate.images =
-        pendingUpdate.images.slice(0, 3);
+    const validation = validateHostelChanges(
+      req.body?.pendingUpdate
+    );
+
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: validation.message,
+      });
     }
 
     await docRef.update({
-      pendingUpdate: pendingUpdate,
-
-      status: "update_pending"
+      pendingUpdate: validation.data,
+      status: "update_pending",
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Update request sent for admin approval"
+      message: "Update request sent for admin approval.",
+      pendingUpdate: validation.data,
     });
-
   } catch (err) {
-    console.error("Update hostel error:", err);
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    return sendServerError(res, "Update hostel", err);
   }
 };
 
-
 // ======================================================
-// 🔥 APPROVE EDIT REQUEST
+// APPROVE HOSTEL EDIT
 // PATCH /hostels/approve-edit/:id
 // ======================================================
 exports.approveHostelEdit = async (req, res) => {
   try {
-
-    const id = req.params.id;
-
-    const docRef = hostelsRef.doc(id);
-
+    const docRef = hostelsRef.doc(req.params.id);
     const doc = await docRef.get();
 
     if (!doc.exists) {
       return res.status(404).json({
         success: false,
-        message: "Hostel not found"
+        message: "Hostel not found.",
       });
     }
 
     const data = doc.data();
+    const pendingUpdate = data.pendingUpdate;
 
-    // ================================================
-    // CHECK PENDING UPDATE
-    // ================================================
-    if (!data.pendingUpdate) {
+    if (
+      data.status !== "update_pending" ||
+      !pendingUpdate ||
+      typeof pendingUpdate !== "object"
+    ) {
       return res.status(400).json({
         success: false,
-        message: "No pending update"
+        message: "No pending edit request exists.",
       });
     }
 
-    const u = data.pendingUpdate;
+    // Revalidate stored pending data before applying it.
+    const validation = validateHostelChanges(pendingUpdate);
 
-    // ================================================
-    // APPLY PENDING UPDATE
-    // ================================================
-    const updatedHostel = {
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: validation.message,
+      });
+    }
 
-      ...data,
+    const updatedFields = validation.data;
 
-      name:
-        u.name ?? data.name,
-
-      rent:
-        u.rent ?? data.rent,
-
-      category:
-        u.category ?? data.category,
-
-      facilities:
-        u.facilities ?? data.facilities,
-
-      latitude:
-        u.latitude ?? data.latitude,
-
-      longitude:
-        u.longitude ?? data.longitude,
-
-      whatsapp:
-        u.whatsapp ?? data.whatsapp,
-
-      // ================================================
-      // CLOUDINARY IMAGES
-      // MAXIMUM 3
-      // ================================================
-      images:
-        Array.isArray(u.images)
-          ? u.images.slice(0, 3)
-          : (data.images || []),
-
+    // Merge approved changes with existing hostel data.
+    // Do not overwrite the document's ID or creation timestamp.
+    await docRef.update({
+      ...updatedFields,
       pendingUpdate: null,
+      status: "approved",
+    });
 
-      status: "approved"
-    };
-
-    await docRef.set(
-      updatedHostel,
-      {
-        merge: true
-      }
-    );
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Edit approved successfully"
+      message: "Hostel edit approved successfully.",
     });
-
   } catch (err) {
-    console.error(
-      "Approve hostel edit error:",
-      err
-    );
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    return sendServerError(res, "Approve hostel edit", err);
   }
 };
