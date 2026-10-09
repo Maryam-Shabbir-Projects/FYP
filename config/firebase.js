@@ -1,29 +1,14 @@
-
 const admin = require("firebase-admin");
 
-const projectId = process.env.FIREBASE_PROJECT_ID;
-const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+// ONLY ONE FILE
+const serviceAccount = require("./hostel-finder-e4aef-firebase-adminsdk-fbsvc-76ead5cc1d.json");
 
-if (!projectId || !clientEmail || !privateKey) {
-  throw new Error(
-    "Missing Firebase environment variables. Check Vercel settings."
-  );
-}
-
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId,
-      clientEmail,
-      privateKey: privateKey.replace(/\\n/g, "\n"),
-    }),
-  });
-}
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 const db = admin.firestore();
 
-console.log("Firebase initialized for project:", projectId);
+console.log("🔥 Firebase connected to:", serviceAccount.project_id);
 
 module.exports = db;
-
