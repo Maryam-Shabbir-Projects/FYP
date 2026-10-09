@@ -1,8 +1,6 @@
-
 const db = require("../config/firebase");
 
 const hostelsRef = db.collection("hostels");
-
 const MAX_IMAGES = 3;
 
 // ======================================================
@@ -19,81 +17,104 @@ function sendServerError(res, operation, err) {
 }
 
 // ======================================================
-// HELPER: VALIDATE IMAGE URLS
-// Accept HTTPS Cloudinary delivery URLs only.
+// HELPER: CHECK EMPTY FIELDS
 // ======================================================
-function validateImages(images) {
-  if (images === undefined) {
-    return {
-      valid: true,
-      images: undefined,
-    };
-  }
+function isBlank(value) {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && value.trim() === "")
+  );
+}
 
-  if (!Array.isArray(images)) {
+// ======================================================
+// HELPER: VALIDATE PAKISTANI MOBILE NUMBER
+// Accepted examples:
+// 03001234567
+// +923001234567
+// 923001234567
+// 00923001234567
+// ======================================================
+function validatePakistaniMobile(value) {
+  if (typeof value !== "string" || !value.trim()) {
     return {
       valid: false,
-      message: "Images must be an array of Cloudinary URLs.",
+      message: "WhatsApp/mobile number is required.",
     };
   }
 
-  if (images.length > MAX_IMAGES) {
+  let digits = value.trim().replace(/[\s()-]/g, "");
+
+  if (digits.startsWith("+")) {
+    digits = digits.slice(1);
+  }
+
+  if (digits.startsWith("0092")) {
+    digits = digits.slice(4);
+  } else if (digits.startsWith("92")) {
+    digits = digits.slice(2);
+  } else if (digits.startsWith("0")) {
+    digits = digits.slice(1);
+  }
+
+  // Pakistani mobile numbers have 10 digits after country code 92.
+  if (!/^3\d{9}$/.test(digits)) {
     return {
       valid: false,
-      message: `A maximum of ${MAX_IMAGES} images is allowed.`,
+      message:
+        "Enter a valid Pakistani mobile number, e.g. 03001234567 or +923001234567.",
     };
-  }
-
-  const cleanImages = [];
-
-  for (const image of images) {
-    if (typeof image !== "string" || !image.trim()) {
-      return {
-        valid: false,
-        message: "Every image must be a valid URL string.",
-      };
-    }
-
-    try {
-      const parsedUrl = new URL(image.trim());
-
-      if (
-        parsedUrl.protocol !== "https:" ||
-        parsedUrl.hostname.toLowerCase() !==
-          "res.cloudinary.com"
-      ) {
-        return {
-          valid: false,
-          message:
-            "Images must use HTTPS Cloudinary delivery URLs.",
-        };
-      }
-
-      cleanImages.push(parsedUrl.href);
-    } catch {
-      return {
-        valid: false,
-        message: "An image URL is invalid.",
-      };
-    }
   }
 
   return {
     valid: true,
-    images: cleanImages,
+    value: `+92${digits}`,
   };
 }
 
 // ======================================================
-// HELPER: VALIDATE NUMERIC FIELDS
+// HELPER: VALIDATE EMAIL
 // ======================================================
-function parseNonNegativeNumber(value, field) {
-  const number = Number(value);
-
-  if (!Number.isFinite(number) || number < 0) {
+function validateEmail(value) {
+  if (typeof value !== "string" || !value.trim()) {
     return {
       valid: false,
-      message: `${field} must be a valid non-negative number.`,
+      message: "Email is required.",
+    };
+  }
+
+  const email = value.trim();
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+    return {
+      valid: false,
+      message: "Enter a valid email address.",
+    };
+  }
+
+  return {
+    valid: true,
+    value: email,
+  };
+}
+
+// ======================================================
+// HELPER: VALIDATE POSITIVE RENT
+// ======================================================
+function parseRent(value) {
+  if (isBlank(value)) {
+    return {
+      valid: false,
+      message: "Monthly rent is required.",
+    };
+  }
+
+  const number = Number(value);
+
+  if (!Number.isFinite(number) || number <= 0) {
+    return {
+      valid: false,
+      message: "Rent must be a valid number greater than zero.",
     };
   }
 
@@ -103,7 +124,17 @@ function parseNonNegativeNumber(value, field) {
   };
 }
 
+// ======================================================
+// HELPER: VALIDATE COORDINATES
+// ======================================================
 function parseCoordinate(value, field) {
+  if (isBlank(value)) {
+    return {
+      valid: false,
+      message: `${field} is required.`,
+    };
+  }
+
   const number = Number(value);
 
   if (!Number.isFinite(number)) {
@@ -130,7 +161,217 @@ function parseCoordinate(value, field) {
 }
 
 // ======================================================
-// HELPER: VALIDATE EDIT REQUEST
+// HELPER: VALIDATE HOSTEL IMAGES
+// Accept HTTPS Cloudinary URLs only.
+// Maximum 3 images.
+// ======================================================
+function validateImages(images) {
+  if (!Array.isArray(images)) {
+    return {
+      valid: false,
+      message: "Hostel images must be provided as an array.",
+    };
+  }
+
+  if (images.length === 0) {
+    return {
+      valid: false,
+      message: "Please upload at least one hostel image.",
+    };
+  }
+
+  if (images.length > MAX_IMAGES) {
+    return {
+      valid: false,
+      message: `A maximum of ${MAX_IMAGES} images is allowed.`,
+    };
+  }
+
+  const cleanImages = [];
+
+  for (const image of images) {
+    if (typeof image !== "string" || !image.trim()) {
+      return {
+        valid: false,
+        message: "Every image must have a valid URL.",
+      };
+    }
+
+    try {
+      const parsedUrl = new URL(image.trim());
+
+      if (
+        parsedUrl.protocol !== "https:" ||
+        parsedUrl.hostname.toLowerCase() !== "res.cloudinary.com"
+      ) {
+        return {
+          valid: false,
+          message: "Images must use HTTPS Cloudinary URLs.",
+        };
+      }
+
+      cleanImages.push(parsedUrl.href);
+    } catch {
+      return {
+        valid: false,
+        message: "An image URL is invalid.",
+      };
+    }
+  }
+
+  return {
+    valid: true,
+    images: cleanImages,
+  };
+}
+
+// ======================================================
+// HELPER: VALIDATE FACILITIES
+// Requires a non-empty object with valid values.
+// ======================================================
+function validateFacilities(facilities) {
+  if (
+    !facilities ||
+    typeof facilities !== "object" ||
+    Array.isArray(facilities) ||
+    Object.keys(facilities).length === 0
+  ) {
+    return {
+      valid: false,
+      message: "Please select or provide at least one facility.",
+    };
+  }
+
+  for (const [key, value] of Object.entries(facilities)) {
+    if (
+      !key.trim() ||
+      value === undefined ||
+      value === null ||
+      (typeof value === "string" && !value.trim())
+    ) {
+      return {
+        valid: false,
+        message: "Please complete every facilities field.",
+      };
+    }
+  }
+
+  return {
+    valid: true,
+    value: facilities,
+  };
+}
+
+// ======================================================
+// HELPER: VALIDATE ALL REQUIRED FIELDS FOR ADD HOSTEL
+// ======================================================
+function validateNewHostel(data) {
+  const requiredFields = [
+    "name",
+    "rent",
+    "category",
+    "facilities",
+    "latitude",
+    "longitude",
+    "whatsapp",
+    "email",
+    "images",
+  ];
+
+  const missingFields = requiredFields.filter((field) => {
+    if (!Object.hasOwn(data, field) || isBlank(data[field])) {
+      return true;
+    }
+
+    if (field === "images") {
+      return !Array.isArray(data.images) || data.images.length === 0;
+    }
+
+    return false;
+  });
+
+  if (missingFields.length > 0) {
+    return {
+      valid: false,
+      message: "Please fill in all required fields.",
+      missingFields,
+    };
+  }
+
+  if (typeof data.name !== "string" || !data.name.trim()) {
+    return {
+      valid: false,
+      message: "Hostel name is required.",
+    };
+  }
+
+  if (typeof data.category !== "string" || !data.category.trim()) {
+    return {
+      valid: false,
+      message: "Please select a hostel category.",
+    };
+  }
+
+  const rentResult = parseRent(data.rent);
+
+  if (!rentResult.valid) {
+    return rentResult;
+  }
+
+  const latitudeResult = parseCoordinate(data.latitude, "Latitude");
+
+  if (!latitudeResult.valid) {
+    return latitudeResult;
+  }
+
+  const longitudeResult = parseCoordinate(data.longitude, "Longitude");
+
+  if (!longitudeResult.valid) {
+    return longitudeResult;
+  }
+
+  const facilitiesResult = validateFacilities(data.facilities);
+
+  if (!facilitiesResult.valid) {
+    return facilitiesResult;
+  }
+
+  const phoneResult = validatePakistaniMobile(data.whatsapp);
+
+  if (!phoneResult.valid) {
+    return phoneResult;
+  }
+
+  const emailResult = validateEmail(data.email);
+
+  if (!emailResult.valid) {
+    return emailResult;
+  }
+
+  const imageResult = validateImages(data.images);
+
+  if (!imageResult.valid) {
+    return imageResult;
+  }
+
+  return {
+    valid: true,
+    data: {
+      name: data.name.trim(),
+      rent: rentResult.value,
+      category: data.category.trim(),
+      facilities: facilitiesResult.value,
+      latitude: latitudeResult.value,
+      longitude: longitudeResult.value,
+      whatsapp: phoneResult.value,
+      email: emailResult.value,
+      images: imageResult.images,
+    },
+  };
+}
+
+// ======================================================
+// HELPER: VALIDATE HOSTEL EDIT REQUEST
 // ======================================================
 function validateHostelChanges(input) {
   if (
@@ -178,7 +419,7 @@ function validateHostelChanges(input) {
     ) {
       return {
         valid: false,
-        message: "Hostel name cannot be empty.",
+        message: "Hostel name is required.",
       };
     }
 
@@ -186,10 +427,13 @@ function validateHostelChanges(input) {
   }
 
   if (Object.hasOwn(cleanUpdate, "category")) {
-    if (typeof cleanUpdate.category !== "string") {
+    if (
+      typeof cleanUpdate.category !== "string" ||
+      !cleanUpdate.category.trim()
+    ) {
       return {
         valid: false,
-        message: "Category must be a string.",
+        message: "Category is required.",
       };
     }
 
@@ -197,10 +441,7 @@ function validateHostelChanges(input) {
   }
 
   if (Object.hasOwn(cleanUpdate, "rent")) {
-    const result = parseNonNegativeNumber(
-      cleanUpdate.rent,
-      "Rent"
-    );
+    const result = parseRent(cleanUpdate.rent);
 
     if (!result.valid) return result;
 
@@ -209,15 +450,36 @@ function validateHostelChanges(input) {
 
   for (const field of ["latitude", "longitude"]) {
     if (Object.hasOwn(cleanUpdate, field)) {
-      const result = parseCoordinate(
-        cleanUpdate[field],
-        field
-      );
+      const result = parseCoordinate(cleanUpdate[field], field);
 
       if (!result.valid) return result;
 
       cleanUpdate[field] = result.value;
     }
+  }
+
+  if (Object.hasOwn(cleanUpdate, "whatsapp")) {
+    const result = validatePakistaniMobile(cleanUpdate.whatsapp);
+
+    if (!result.valid) return result;
+
+    cleanUpdate.whatsapp = result.value;
+  }
+
+  if (Object.hasOwn(cleanUpdate, "email")) {
+    const result = validateEmail(cleanUpdate.email);
+
+    if (!result.valid) return result;
+
+    cleanUpdate.email = result.value;
+  }
+
+  if (Object.hasOwn(cleanUpdate, "facilities")) {
+    const result = validateFacilities(cleanUpdate.facilities);
+
+    if (!result.valid) return result;
+
+    cleanUpdate.facilities = result.value;
   }
 
   if (Object.hasOwn(cleanUpdate, "images")) {
@@ -226,32 +488,6 @@ function validateHostelChanges(input) {
     if (!result.valid) return result;
 
     cleanUpdate.images = result.images;
-  }
-
-  if (Object.hasOwn(cleanUpdate, "facilities")) {
-    if (
-      !cleanUpdate.facilities ||
-      typeof cleanUpdate.facilities !== "object" ||
-      Array.isArray(cleanUpdate.facilities)
-    ) {
-      return {
-        valid: false,
-        message: "Facilities must be an object.",
-      };
-    }
-  }
-
-  for (const field of ["whatsapp", "email"]) {
-    if (Object.hasOwn(cleanUpdate, field)) {
-      if (typeof cleanUpdate[field] !== "string") {
-        return {
-          valid: false,
-          message: `${field} must be a string.`,
-        };
-      }
-
-      cleanUpdate[field] = cleanUpdate[field].trim();
-    }
   }
 
   return {
@@ -268,103 +504,20 @@ exports.addHostel = async (req, res) => {
   try {
     const data = req.body || {};
 
-    const name =
-      typeof data.name === "string"
-        ? data.name.trim()
-        : "";
+    const validation = validateNewHostel(data);
 
-    if (!name) {
+    if (!validation.valid) {
       return res.status(400).json({
         success: false,
-        message: "Hostel name is required.",
-      });
-    }
-
-    const rentResult = parseNonNegativeNumber(
-      data.rent ?? 0,
-      "Rent"
-    );
-
-    if (!rentResult.valid) {
-      return res.status(400).json({
-        success: false,
-        message: rentResult.message,
-      });
-    }
-
-    const latitudeResult = parseCoordinate(
-      data.latitude ?? 0,
-      "latitude"
-    );
-
-    const longitudeResult = parseCoordinate(
-      data.longitude ?? 0,
-      "longitude"
-    );
-
-    if (!latitudeResult.valid) {
-      return res.status(400).json({
-        success: false,
-        message: latitudeResult.message,
-      });
-    }
-
-    if (!longitudeResult.valid) {
-      return res.status(400).json({
-        success: false,
-        message: longitudeResult.message,
-      });
-    }
-
-    const imageResult = validateImages(data.images);
-
-    if (!imageResult.valid) {
-      return res.status(400).json({
-        success: false,
-        message: imageResult.message,
-      });
-    }
-
-    if (
-      data.facilities !== undefined &&
-      (
-        !data.facilities ||
-        typeof data.facilities !== "object" ||
-        Array.isArray(data.facilities)
-      )
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Facilities must be an object.",
+        message: validation.message,
+        ...(validation.missingFields
+          ? { missingFields: validation.missingFields }
+          : {}),
       });
     }
 
     const newHostel = {
-      name,
-      rent: rentResult.value,
-
-      category:
-        typeof data.category === "string"
-          ? data.category.trim()
-          : "",
-
-      facilities: data.facilities || {},
-
-      latitude: latitudeResult.value,
-      longitude: longitudeResult.value,
-
-      whatsapp:
-        typeof data.whatsapp === "string"
-          ? data.whatsapp.trim()
-          : "",
-
-      email:
-        typeof data.email === "string"
-          ? data.email.trim()
-          : "",
-
-      images: imageResult.images || [],
-
+      ...validation.data,
       status: "pending",
       pendingUpdate: null,
       createdAt: new Date(),
@@ -551,14 +704,7 @@ exports.approveHostel = async (req, res) => {
 // ======================================================
 // SUBMIT HOSTEL EDIT REQUEST
 // PUT /hostels/:id
-//
-// Body:
-// {
-//   "pendingUpdate": {
-//     "name": "Updated Hostel",
-//     "images": ["https://res.cloudinary.com/..."]
-//   }
-// }
+// Body: { "pendingUpdate": { ... } }
 // ======================================================
 exports.updateHostel = async (req, res) => {
   try {
@@ -641,7 +787,7 @@ exports.approveHostelEdit = async (req, res) => {
       });
     }
 
-    // Revalidate stored pending data before applying it.
+    // Revalidate the stored update before applying it.
     const validation = validateHostelChanges(pendingUpdate);
 
     if (!validation.valid) {
@@ -651,12 +797,8 @@ exports.approveHostelEdit = async (req, res) => {
       });
     }
 
-    const updatedFields = validation.data;
-
-    // Merge approved changes with existing hostel data.
-    // Do not overwrite the document's ID or creation timestamp.
     await docRef.update({
-      ...updatedFields,
+      ...validation.data,
       pendingUpdate: null,
       status: "approved",
     });
