@@ -78,3 +78,8 @@ DELETE  http://localhost:5000/hostels/:id
 GET     http://localhost:5000/
         (Check if backend is running — No login required)
 
+# for git
+git status
+git add config/firebase.js .gitignore
+git commit -m "Update Firebase configuration"
+git push origin main
