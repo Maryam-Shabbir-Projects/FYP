@@ -1,17 +1,28 @@
 
 const admin = require("firebase-admin");
-const serviceAccount = require(
-  "./hostel-finder-e4aef-firebase-adminsdk-fbsvc-76ead5cc1d.json"
-);
 
 if (!admin.apps.length) {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+
+  if (!projectId || !clientEmail || !privateKey) {
+    throw new Error(
+      "Missing Firebase environment variables. Check FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY."
+    );
+  }
+
   admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+    credential: admin.credential.cert({
+      projectId,
+      clientEmail,
+      privateKey,
+    }),
   });
 }
 
 const db = admin.firestore();
 
-console.log("Firebase initialized for project:", serviceAccount.project_id);
+console.log("Firebase Admin initialized for project:", process.env.FIREBASE_PROJECT_ID);
 
 module.exports = db;
